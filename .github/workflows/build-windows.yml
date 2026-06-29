@@ -1,0 +1,69 @@
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "**.py"
+      - "eleven_voice_changer.spec"
+      - "requirements.txt"
+      - ".github/workflows/build-windows.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: pyinstaller --noconfirm eleven_voice_changer.spec
+
+      - name: Show build size
+        shell: bash
+        run: du -sh dist/ElevenVoiceChanger || true
+
+      - name: Package as ZIP
+        shell: pwsh
+        run: |
+          cd dist
+          Compress-Archive -Path ElevenVoiceChanger -DestinationPath ElevenVoiceChanger-windows.zip -CompressionLevel Optimal
+          Get-ChildItem ElevenVoiceChanger-windows.zip
+
+      - name: Publish to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" \
+            dist/ElevenVoiceChanger-windows.zip \
+            --title "Windows build ${{ github.run_number }}" \
+            --notes "Standalone Windows build of **ElevenLabs Voice Changer**.
+
+          **Jak użyć:**
+          1. Pobierz \`ElevenVoiceChanger-windows.zip\` poniżej.
+          2. Rozpakuj. Wejdź do folderu \`ElevenVoiceChanger\` i odpal \`ElevenVoiceChanger.exe\`.
+          3. W GUI wpisz **API key** z https://elevenlabs.io/app/settings/api-keys.
+          4. Kliknij **Load voices** — wybierz swój wytrenowany głos z listy.
+          5. **Output to** ustaw na **CABLE Input (VB-Audio Virtual Cable)** (po zainstalowaniu VB-Cable z https://vb-audio.com/Cable/).
+          6. W Telegramie/Discordzie wybierz **CABLE Output** jako input mic.
+          7. **Trzymaj** wielki niebieski przycisk (lub spację) podczas mówienia. Po puszczeniu audio leci do ElevenLabs i odtwarza się jako twój wytrenowany głos w wybranym output device → rozmówca słyszy zmieniony głos.
+
+          Ustawienia (API key, voice ID, devices) zapisują się w \`%APPDATA%/ElevenVoiceChanger/settings.json\`."

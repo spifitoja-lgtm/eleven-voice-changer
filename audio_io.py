@@ -28,6 +28,30 @@ def list_output_devices() -> list[tuple[int, str]]:
     return devs
 
 
+def device_default_samplerate(device_index: int | None) -> int:
+    """Return the device's default samplerate as int (fallback 44100)."""
+    if device_index is None:
+        try:
+            return int(sd.query_devices(kind="output")["default_samplerate"])
+        except Exception:
+            return 44100
+    try:
+        return int(sd.query_devices(device_index)["default_samplerate"])
+    except Exception:
+        return 44100
+
+
+def resample_int16(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    """Linear-interpolate int16 PCM from src_rate to dst_rate."""
+    if src_rate == dst_rate or len(pcm) == 0:
+        return pcm
+    n_src = len(pcm)
+    n_dst = max(1, int(round(n_src * dst_rate / src_rate)))
+    x_src = np.arange(n_src, dtype=np.float64)
+    x_dst = np.linspace(0, n_src - 1, num=n_dst, dtype=np.float64)
+    return np.interp(x_dst, x_src, pcm.astype(np.float32)).astype(np.int16)
+
+
 class Recorder:
     """Continuous capture into a queue; .stop_and_collect() returns int16 PCM."""
 
@@ -42,13 +66,27 @@ class Recorder:
         with self._lock:
             if self.stream:
                 return
-            self.stream = sd.InputStream(
-                device=self.device_index,
-                samplerate=self.samplerate,
-                channels=CAPTURE_CHANNELS,
-                dtype="float32",
-                callback=self._cb,
-            )
+            # Try requested rate first; fall back to device default on InvalidSampleRate
+            try:
+                self.stream = sd.InputStream(
+                    device=self.device_index,
+                    samplerate=self.samplerate,
+                    channels=CAPTURE_CHANNELS,
+                    dtype="float32",
+                    callback=self._cb,
+                )
+            except sd.PortAudioError as e:
+                if "Invalid sample rate" in str(e) or "-9997" in str(e):
+                    self.samplerate = device_default_samplerate(self.device_index)
+                    self.stream = sd.InputStream(
+                        device=self.device_index,
+                        samplerate=self.samplerate,
+                        channels=CAPTURE_CHANNELS,
+                        dtype="float32",
+                        callback=self._cb,
+                    )
+                else:
+                    raise
             self.stream.start()
 
     def _cb(self, indata, frames, time_, status) -> None:
@@ -76,26 +114,53 @@ class Recorder:
 
 
 class Player:
-    """Streaming int16 PCM playback to an output device."""
+    """Streaming int16 PCM playback to an output device.
 
-    def __init__(self, device_index: int | None, samplerate: int = 44100):
+    `source_samplerate` is the rate of incoming PCM (from ElevenLabs).
+    Stream is opened at the device's native default rate; chunks are
+    resampled on the fly if rates differ.
+    """
+
+    def __init__(
+        self,
+        device_index: int | None,
+        source_samplerate: int = 44100,
+        device_samplerate: int | None = None,
+    ):
         self.device_index = device_index
-        self.samplerate = samplerate
+        self.source_samplerate = source_samplerate
+        self.device_samplerate = device_samplerate or device_default_samplerate(device_index)
         self.stream: sd.OutputStream | None = None
 
     def __enter__(self) -> "Player":
-        self.stream = sd.OutputStream(
-            device=self.device_index,
-            samplerate=self.samplerate,
-            channels=1,
-            dtype="int16",
-        )
-        self.stream.start()
+        # Try device default first; if that fails, try a few common rates
+        candidates = [self.device_samplerate, 48000, 44100, 22050, 16000]
+        last_err: Exception | None = None
+        for rate in candidates:
+            try:
+                self.stream = sd.OutputStream(
+                    device=self.device_index,
+                    samplerate=rate,
+                    channels=1,
+                    dtype="int16",
+                )
+                self.stream.start()
+                self.device_samplerate = rate
+                break
+            except sd.PortAudioError as e:
+                last_err = e
+                continue
+        if not self.stream:
+            raise RuntimeError(
+                f"Output device doesn't accept any common samplerate. Last err: {last_err}"
+            )
         return self
 
     def write(self, pcm: np.ndarray) -> None:
         if self.stream is None:
             return
+        if self.source_samplerate != self.device_samplerate:
+            pcm = resample_int16(pcm, self.source_samplerate, self.device_samplerate)
         self.stream.write(pcm.reshape(-1, 1))
 
     def __exit__(self, *exc) -> None:

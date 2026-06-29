@@ -20,6 +20,7 @@ from audio_io import (
     CAPTURE_SAMPLERATE,
     Player,
     Recorder,
+    device_default_samplerate,
     list_input_devices,
     list_output_devices,
 )
@@ -283,20 +284,28 @@ class App:
         model = self.model_var.get()
         stability = float(self.stability_var.get())
         similarity = float(self.similarity_var.get())
+        # Request ElevenLabs PCM at a rate the device supports — 44100 if device
+        # is 44100/48000/22050 etc., else fall back to 22050. Player handles
+        # resampling to the actual device rate.
+        sts_rate = 44100
         try:
             self.log_q.put(f"[api] sending {len(pcm) / CAPTURE_SAMPLERATE:.1f}s of audio…")
-            with Player(out_index, samplerate=OUTPUT_SAMPLERATE) as player:
+            with Player(out_index, source_samplerate=sts_rate) as player:
+                if player.device_samplerate != sts_rate:
+                    self.log_q.put(
+                        f"[player] device rate {player.device_samplerate}Hz — resampling from {sts_rate}Hz"
+                    )
                 total = 0
                 for chunk in convert_stream(
                     api, voice_id, pcm, CAPTURE_SAMPLERATE,
                     model_id=model,
                     stability=stability,
                     similarity_boost=similarity,
-                    output_samplerate=OUTPUT_SAMPLERATE,
+                    output_samplerate=sts_rate,
                 ):
                     player.write(chunk)
                     total += len(chunk)
-            secs = total / OUTPUT_SAMPLERATE
+            secs = total / sts_rate
             self.log_q.put(f"[api] played {secs:.1f}s of converted audio")
             self.status_var.set("Ready.")
         except Exception as e:

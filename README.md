@@ -53,3 +53,15 @@ python3.13 -m venv .venv
 API key + voice_id + ustawienia urządzeń zapisują się **lokalnie** w `%APPDATA%/ElevenVoiceChanger/settings.json` (Windows) lub `~/.config/eleven-voice-changer/settings.json` (Mac/Linux). Plain JSON — nikt poza tobą nie ma dostępu.
 
 Audio leci tylko: lokalny mikrofon → ElevenLabs API → lokalne audio out. Brak innych third-party.
+
+## Coś nie działa? Napraw przez AI.
+
+**[LLM_CONTEXT.md](LLM_CONTEXT.md)** zawiera CAŁY kod projektu + opis architektury + listę znanych problemów w jednym pliku Markdown. Workflow naprawy:
+
+1. Otwórz **LLM_CONTEXT.md**, kliknij **Raw** w GitHub → skopiuj wszystko (~30k znaków)
+2. Wklej do Claude / ChatGPT / Gemini
+3. Opisz problem: *"przy push-to-talk słyszę szum zamiast głosu"* / *"crashuje na X"* / etc.
+4. AI dostaje pełen kontekst, proponuje fix w konkretnym pliku
+5. PR / commit + push → GitHub Actions builduje nowy EXE automatycznie
+
+Każdy kto wziął ZIP i nie umie czytać Pythona — może w 5 min nauczyć AI naprawiać to za siebie.

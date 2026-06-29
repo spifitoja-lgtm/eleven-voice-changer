@@ -264,7 +264,8 @@ class App:
             return
 
         pcm = rec.stop_and_collect()
-        if pcm is None or len(pcm) < CAPTURE_SAMPLERATE // 4:  # < 0.25s
+        rec_rate = rec.samplerate  # actual capture rate (mic might have forced 48k fallback)
+        if pcm is None or len(pcm) < rec_rate // 4:  # < 0.25s
             self.status_var.set("Ready. (too short to send)")
             self._log("[rec] too short, skipped")
             return
@@ -277,9 +278,9 @@ class App:
             return
 
         self._save_state()
-        threading.Thread(target=self._send_worker, args=(api, voice_id, pcm), daemon=True).start()
+        threading.Thread(target=self._send_worker, args=(api, voice_id, pcm, rec_rate), daemon=True).start()
 
-    def _send_worker(self, api: str, voice_id: str, pcm) -> None:
+    def _send_worker(self, api: str, voice_id: str, pcm, rec_rate: int) -> None:
         out_index = self._get_output_index()
         model = self.model_var.get()
         stability = float(self.stability_var.get())
@@ -289,7 +290,7 @@ class App:
         # resampling to the actual device rate.
         sts_rate = 44100
         try:
-            self.log_q.put(f"[api] sending {len(pcm) / CAPTURE_SAMPLERATE:.1f}s of audio…")
+            self.log_q.put(f"[api] sending {len(pcm) / rec_rate:.1f}s of audio (recorded at {rec_rate}Hz)…")
             with Player(out_index, source_samplerate=sts_rate) as player:
                 if player.device_samplerate != sts_rate:
                     self.log_q.put(
@@ -297,7 +298,7 @@ class App:
                     )
                 total = 0
                 for chunk in convert_stream(
-                    api, voice_id, pcm, CAPTURE_SAMPLERATE,
+                    api, voice_id, pcm, rec_rate,
                     model_id=model,
                     stability=stability,
                     similarity_boost=similarity,
